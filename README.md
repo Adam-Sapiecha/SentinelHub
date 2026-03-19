@@ -1,5 +1,3 @@
-# Sensorbite
-
 ## Opis
 
 Projekt prezentuje aplikację do wyznaczania tras ewakuacji z uwzględnieniem zagrożeń powodziowych.
