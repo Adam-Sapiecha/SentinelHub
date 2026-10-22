@@ -100,6 +100,9 @@ function showWorkspace(data) {
   byId("data-mode").textContent=({sample:"DANE PRZYKŁADOWE",user:"DANE UŻYTKOWNIKA",live:"IMPORT ZEWNĘTRZNY"})[datasets?.data_mode] || "PRYWATNA PRZESTRZEŃ";
   if (datasets) {
     byId("data-source").value=datasets.source;
+    const observed = datasets.observed_at ? new Date(datasets.observed_at) : null;
+    byId("observed-at").value = observed && Number.isFinite(observed.getTime())
+      ? new Date(observed.getTime()-observed.getTimezoneOffset()*60000).toISOString().slice(0,16) : "";
     byId("sample-data").checked=datasets.data_mode === "sample";
     const points=roadPoints(datasets);
     if (points.length) {byId("route-start").value=[points[0][1],points[0][0]].join(",");byId("route-end").value=[points.at(-1)[1],points.at(-1)[0]].join(",");}

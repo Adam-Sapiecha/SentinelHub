@@ -53,6 +53,7 @@ const assert=require("node:assert/strict");
     assert.equal(await page.locator("#workspace-key").inputValue(),"");
     await page.locator("#workspace-id").fill(access.workspace_id);await page.locator("#workspace-key").fill(access.key);
     await page.locator("#open-workspace").click();await ready("odczytana");
+    assert.equal(await page.locator("#observed-at").inputValue(),"2026-01-01T10:00");
     await page.locator(".history-item button").first().click();await ready("Odczytano zapisany wynik");
     assert.equal(await page.locator("#own-blocked").innerText(),"1 / 4");
     await page.locator("#route-start").fill("90,180");await page.locator("#calculate-route").click();await ready("zbyt daleko");
