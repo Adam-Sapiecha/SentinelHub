@@ -1,0 +1,12 @@
+# Exact direct and transitive versions verified on Python 3.12.
+-r requirements.txt
+colorama==0.4.6; sys_platform == "win32"
+httpcore2==2.12.0
+httpx2==2.12.0
+iniconfig==2.3.1
+packaging==26.3
+pluggy==1.7.0
+pygments==2.21.0
+pytest==9.1.1
+ruff==0.16.6
+truststore==0.10.5

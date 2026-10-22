@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#163c34">
+  <meta name="description" content="SentinelHub: obliczanie objazdów po zalaniu dróg. Interaktywne demo backendu na jawnie syntetycznych danych.">
+  <title>SentinelHub · Trasa poza zalaniem</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="SentinelHub — początek"><span class="brand-mark" aria-hidden="true">S<span>↗</span></span>Sentinel<span class="brand-light">Hub</span></a>
+    <span class="top-caption">FLOOD-AWARE ROUTING</span>
+    <nav aria-label="Linki projektu"><a href="./docs" target="_blank" rel="noopener">API <span aria-hidden="true">↗</span></a><a href="https://github.com/Adam-Sapiecha/SentinelHub" target="_blank" rel="noopener">Kod źródłowy <span aria-hidden="true">↗</span></a></nav>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="page-title">
+      <div><h1 id="page-title">Przykład objazdu zalanych dróg</h1><p class="subtitle">Wybierz scenariusz i oblicz trasę na syntetycznej sieci drogowej.</p></div>
+      <div class="sample-badge"><span class="sample-dot"></span>DANE SYNTETYCZNE<span class="badge-sub">Demo bez usług zewnętrznych</span></div>
+    </section>
+    <div class="workspace">
+      <aside class="control-panel">
+        <div class="panel-heading"><span class="eyebrow">USTAWIENIA ANALIZY</span></div>
+        <form id="analysis-form">
+          <fieldset id="scenario-fields"><legend>1. Wybierz sytuację</legend><div id="scenarios" class="scenario-list"></div></fieldset>
+          <fieldset><legend>2. Wyznacz punkty</legend>
+            <div class="point-field"><span class="point-dot origin-dot" aria-hidden="true"></span><label for="origin">Punkt startowy</label><select id="origin" name="origin" required></select></div>
+            <div class="point-field"><span class="point-dot destination-dot" aria-hidden="true"></span><label for="destination">Punkt docelowy</label><select id="destination" name="destination" required></select></div>
+          </fieldset>
+          <button id="analyze" class="primary-button" type="submit">Oblicz przejazd <span aria-hidden="true">↗</span></button>
+          <button id="reset" class="reset-button" type="button">↺ Przywróć przykład</button>
+        </form>
+        <div class="model-note"><span class="note-icon" aria-hidden="true">i</span><p>Model demonstracyjny: 15 węzłów, 22 odcinki. Drogi i zalanie są wymyślone. To nie jest mapa aktualnego zagrożenia ani narzędzie do prowadzenia ewakuacji.</p></div>
+      </aside>
+      <section class="results-panel" aria-label="Wynik analizy">
+        <div class="map-heading"><div><span class="map-indicator" aria-hidden="true"></span><h2>Sieć drogowa · obszar przykładowy</h2></div><span class="map-label">WGS84 / SCHEMAT</span></div>
+        <div class="map-wrapper"><svg id="network-map" viewBox="0 0 960 510" role="img" aria-labelledby="map-title map-description"><title id="map-title">Schemat przykładowej sieci drogowej</title><desc id="map-description">Wczytywanie danych przykładowych.</desc></svg><div class="north" aria-hidden="true">N<br>↑</div><span class="map-footnote">Geometria syntetyczna · bez podkładu mapowego</span></div>
+        <div class="legend" aria-label="Legenda"><span><i class="key key-route"></i>Trasa po analizie</span><span><i class="key key-baseline"></i>Bez zalania</span><span><i class="key key-blocked"></i>Odcinek zablokowany</span><span><i class="key key-flood"></i>Zalanie</span></div>
+        <div id="status" class="result-status" role="status" aria-live="polite">Łączenie z backendem…</div>
+        <div class="metrics" aria-label="Porównanie tras">
+          <div class="metric"><span>BEZ ZALANIA</span><strong id="baseline-length">—</strong><small>najkrótszy przejazd</small></div>
+          <div class="metric"><span>PO ANALIZIE</span><strong id="route-length">—</strong><small>z pominięciem zalania</small></div>
+          <div class="metric"><span>DODATKOWA DROGA</span><strong id="extra-distance">—</strong><small id="extra-percent">względem trasy bazowej</small></div>
+          <div class="metric"><span>ZABLOKOWANE</span><strong id="blocked-count">—</strong><small>fizyczne odcinki dróg</small></div>
+        </div>
+        <div class="result-footer"><span id="calculation-info">Wynik obliczany przez FastAPI · NetworkX · Shapely</span><button id="download" type="button" disabled>Pobierz GeoJSON ↓</button></div>
+      </section>
+    </div>
+  </main>
+  <footer class="page-footer"><span>SentinelHub <span aria-hidden="true">/</span> Engineering portfolio demo</span><span>Dane: sample · Obliczenia: backend · Bez konta</span></footer>
+</body>
+</html>

@@ -1,0 +1,13 @@
+const assert=require("node:assert/strict");
+const fs=require("node:fs");
+const vm=require("node:vm");
+const context=vm.createContext({});
+vm.runInContext(fs.readFileSync(require("node:path").join(__dirname,"../integrations/sentinel-water.js"),"utf8"),context);
+const pixel=sample=>Array.from(context.evaluatePixel(sample));
+assert.deepEqual(pixel({B03:0.3,B08:0.02,SCL:6,dataMask:1}),[0,0,1,1]);
+assert.deepEqual(pixel({B03:0.05,B08:0.4,SCL:4,dataMask:1}),[0,0,0,1]);
+assert.deepEqual(pixel({B03:0.3,B08:0.02,SCL:9,dataMask:1}),[0,0,0,0]);
+assert.deepEqual(pixel({B03:0,B08:0,SCL:6,dataMask:1}),[0,0,0,0]);
+assert.deepEqual(pixel({B03:0.3,B08:0.02,SCL:6,dataMask:0}),[0,0,0,0]);
+assert.equal(context.setup().output.bands,4);
+console.log("Sentinel evalscript unit PASS: water, land, cloud, missing signal. Not a service/accuracy test.");

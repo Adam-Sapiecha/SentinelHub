@@ -1,59 +1,63 @@
 import xml.etree.ElementTree as ET
-import json
-from typing import Dict, Any
+from pathlib import Path
+from typing import Any
+
+from .io_utils import write_json_atomic
 
 
-def osm_to_roads_geojson(osm_content: str) -> Dict[str, Any]:
-    """
-    Konwertuje dane OSM (XML w formie string) na GeoJSON zawierający tylko drogi (highway=*).
-    Zwraca dict w formacie FeatureCollection.
-    """
-
+def osm_to_roads_geojson(osm_content: str) -> dict[str, Any]:
+    """Convert OSM XML into road features without joining across missing nodes."""
     root = ET.fromstring(osm_content)
-
-    # indeks node_id -> (lon, lat)
-    nodes = {}
+    nodes: dict[str, tuple[float, float]] = {}
 
     for node in root.findall("node"):
-        nid = node.get("id")
-        lat = float(node.get("lat"))
-        lon = float(node.get("lon"))
-        nodes[nid] = (lon, lat)  # GeoJSON używa (lon, lat)
+        node_id = node.get("id")
+        latitude = node.get("lat")
+        longitude = node.get("lon")
+        if node_id is None or latitude is None or longitude is None:
+            continue
+        nodes[node_id] = (float(longitude), float(latitude))
 
-    features = []
-
+    features: list[dict[str, Any]] = []
     for way in root.findall("way"):
-        tags = {tag.get("k"): tag.get("v") for tag in way.findall("tag")}
-
-
+        tags = {
+            tag.get("k"): tag.get("v") for tag in way.findall("tag") if tag.get("k") is not None
+        }
         if "highway" not in tags:
             continue
 
-        coords = []
-        for nd in way.findall("nd"):
-            ref = nd.get("ref")
-            if ref in nodes:
-                coords.append(nodes[ref])
+        contiguous_parts: list[list[str]] = []
+        current_part: list[str] = []
+        for reference_element in way.findall("nd"):
+            reference = reference_element.get("ref")
+            if reference is not None and reference in nodes:
+                current_part.append(reference)
+            else:
+                if len(current_part) >= 2:
+                    contiguous_parts.append(current_part)
+                current_part = []
+        if len(current_part) >= 2:
+            contiguous_parts.append(current_part)
 
-        if len(coords) >= 2:
-            feature = {
-                "type": "Feature",
-                "properties": tags,
-                "geometry": {
-                    "type": "LineString",
-                    "coordinates": coords,
-                },
+        for node_ids in contiguous_parts:
+            properties = {
+                **tags,
+                "osm_way_id": way.get("id"),
+                "osm_node_ids": node_ids,
             }
-            features.append(feature)
+            features.append(
+                {
+                    "type": "Feature",
+                    "properties": properties,
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [nodes[node_id] for node_id in node_ids],
+                    },
+                }
+            )
 
-    geojson = {
-        "type": "FeatureCollection",
-        "features": features,
-    }
-
-    return geojson
+    return {"type": "FeatureCollection", "features": features}
 
 
-def save_geojson(geojson: Dict[str, Any], path: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(geojson, f, ensure_ascii=False, indent=2)
+def save_geojson(geojson: dict[str, Any], path: str | Path) -> None:
+    write_json_atomic(Path(path), geojson)

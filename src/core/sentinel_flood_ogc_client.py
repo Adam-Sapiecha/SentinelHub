@@ -1,20 +1,21 @@
-import os
 import logging
+import os
 from dataclasses import dataclass
+from datetime import date, timedelta
 from io import BytesIO
 from pathlib import Path
-from typing import List, Tuple
 
 import numpy as np
 import requests
-from PIL import Image
-from shapely.geometry import box, Polygon, MultiPolygon, mapping
+from PIL import Image, UnidentifiedImageError
+from shapely.geometry import MultiPolygon, Polygon, box, mapping
 from shapely.ops import unary_union
-from dotenv import load_dotenv
+
+from .config import FLOOD_PATH
+from .http_utils import read_limited
+from .io_utils import write_json_atomic
 
 logger = logging.getLogger(__name__)
-
-load_dotenv()
 
 
 # ======================= KONFIGURACJA / STAŁE =======================
@@ -27,10 +28,47 @@ RED_MAX = 30
 GREEN_MAX = 30
 
 BLOCK_SIZE = 4
-MIN_FRACTION_IN_BLOCK = 0.1 
+MIN_FRACTION_IN_BLOCK = 0.1
 
 
-@dataclass
+class SentinelHubServiceError(RuntimeError):
+    """A safe, user-facing description of an error returned by Sentinel Hub."""
+
+
+def _sentinel_error_message(response: requests.Response, payload: bytes | None = None) -> str:
+    """Translate known upstream failures without exposing response or request secrets."""
+    response_text = (payload.decode(errors="replace") if payload is not None else response.text)[
+        :8192
+    ].lower()
+
+    if "account has expired" in response_text:
+        return (
+            "Konto Sentinel Hub wygasło. Odnów dostęp do usługi albo ustaw w .env "
+            "identyfikator instancji OGC z aktywnego konta."
+        )
+    if "layer" in response_text and (
+        "does not exist" in response_text or "not found" in response_text
+    ):
+        return (
+            "Warstwa FLOOD nie istnieje w konfiguracji Sentinel Hub. "
+            "Dodaj ją w konfiguracji instancji OGC."
+        )
+    if response.status_code in {401, 403}:
+        return (
+            f"Sentinel Hub odmówił dostępu (HTTP {response.status_code}). "
+            "Sprawdź stan konta i identyfikator instancji OGC."
+        )
+
+    return f"Sentinel Hub WMS zwrócił HTTP {response.status_code}."
+
+
+def _default_time_range() -> str:
+    end = date.today()
+    start = end - timedelta(days=30)
+    return f"{start.isoformat()}/{end.isoformat()}"
+
+
+@dataclass(frozen=True)
 class SentinelOGCConfig:
     """
     Konfiguracja klienta OGC WMS Sentinel Hub.
@@ -39,10 +77,29 @@ class SentinelOGCConfig:
     UWAGA: INSTANCE_ID to ID instancji (Configuration Utility),
     NIE client_id od OAuth!
     """
+
     instance_id: str
     base_url: str = "https://services.sentinel-hub.com/ogc/wms"
     layer: str = "FLOOD"
-    time: str = "2023-01-01/2025-12-31"
+    time: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.time is None:
+            return
+        try:
+            start_text, end_text = self.time.split("/", maxsplit=1)
+            start = date.fromisoformat(start_text)
+            end = date.fromisoformat(end_text)
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "Zakres czasu Sentinel musi mieć format YYYY-MM-DD/YYYY-MM-DD"
+            ) from error
+        if start > end:
+            raise ValueError("Początek zakresu Sentinel nie może być po jego końcu")
+
+    @property
+    def effective_time(self) -> str:
+        return self.time or _default_time_range()
 
 
 class SentinelOGCFloodClient:
@@ -53,12 +110,17 @@ class SentinelOGCFloodClient:
 
     def __init__(self, config: SentinelOGCConfig, flood_path: Path | None = None):
         self.config = config
-        self.flood_path = flood_path or Path("data/flood.geojson")
+        self.flood_path = flood_path or FLOOD_PATH
         self.flood_path.parent.mkdir(parents=True, exist_ok=True)
 
     # --------------- PUBLICZNE API ----------------
 
-    def update_flood_for_bbox(self, bbox: Tuple[float, float, float, float]) -> int:
+    def update_flood_for_bbox(self, bbox: tuple[float, float, float, float]) -> int:
+        geojson = self.fetch_flood_geojson(bbox)
+        self._save_geojson(geojson)
+        return len(geojson["features"])
+
+    def fetch_flood_geojson(self, bbox: tuple[float, float, float, float]) -> dict:
         """
         Główna metoda wołana z /admin/update-flood.
 
@@ -68,7 +130,10 @@ class SentinelOGCFloodClient:
         south, west, north, east = bbox
         logger.info(
             "Pobieram raster zalania z Sentinel Hub dla bbox S=%.6f, W=%.6f, N=%.6f, E=%.6f",
-            south, west, north, east
+            south,
+            west,
+            north,
+            east,
         )
 
         img = self._fetch_wms_png(bbox)
@@ -77,20 +142,15 @@ class SentinelOGCFloodClient:
 
         polygons = self._mask_to_polygons(coarse_mask, bbox)
         logger.info(
-            "Wygenerowano %d poligonów zalania (po uproszczeniu z kafelków).",
-            len(polygons)
+            "Wygenerowano %d poligonów zalania (po uproszczeniu z kafelków).", len(polygons)
         )
 
-        geojson = self._polygons_to_geojson(polygons)
-        self._save_geojson(geojson)
-
-        return len(polygons)
+        return self._polygons_to_geojson(polygons)
 
     # --------------- KROK 1 – WMS PNG ----------------
 
-    def _fetch_wms_png(self, bbox: Tuple[float, float, float, float]) -> Image.Image:
+    def _fetch_wms_png(self, bbox: tuple[float, float, float, float]) -> Image.Image:
         south, west, north, east = bbox
-
 
         url = f"{self.config.base_url}/{self.config.instance_id}"
 
@@ -102,24 +162,40 @@ class SentinelOGCFloodClient:
             "FORMAT": "image/png",
             "TRANSPARENT": "true",
             "CRS": "EPSG:4326",
-
             "BBOX": f"{south},{west},{north},{east}",
             "WIDTH": str(WMS_WIDTH),
             "HEIGHT": str(WMS_HEIGHT),
-            "TIME": self.config.time,
+            "TIME": self.config.effective_time,
             "SHOWLOGO": "false",
         }
 
-        logger.debug("Wysyłam zapytanie WMS do %s", url)
-        resp = requests.get(url, params=params, timeout=60)
+        logger.debug("Wysyłam zapytanie WMS do Sentinel Hub")
+        resp = requests.get(url, params=params, timeout=(10, 60), stream=True)
+        payload = read_limited(resp)
 
         if resp.status_code != 200:
-            raise RuntimeError(
-                f"Błąd pobierania WMS z Sentinel Hub (HTTP {resp.status_code}): "
-                f"{resp.text[:300]}"
-            )
+            raise SentinelHubServiceError(_sentinel_error_message(resp, payload))
+        if not resp.headers.get("Content-Type", "").lower().startswith("image/"):
+            raise SentinelHubServiceError(_sentinel_error_message(resp, payload))
 
-        return Image.open(BytesIO(resp.content)).convert("RGB")
+        try:
+            with Image.open(BytesIO(payload)) as image:
+                if image.size != (WMS_WIDTH, WMS_HEIGHT):
+                    raise RuntimeError("Sentinel Hub WMS zwrócił nieoczekiwany rozmiar obrazu")
+                image.load()
+                result = image.convert("RGBA")
+                if not result.getchannel("A").getbbox():
+                    raise RuntimeError(
+                        "WMS nie zawiera widocznych danych; "
+                        "pusty raster nie potwierdza braku zalania"
+                    )
+                if result.getchannel("A").getextrema()[0] < 255:
+                    raise RuntimeError(
+                        "WMS zawiera obszary bez wiarygodnych danych; analiza odrzucona"
+                    )
+                return result
+        except (UnidentifiedImageError, OSError) as error:
+            raise RuntimeError("Sentinel Hub WMS zwrócił uszkodzony obraz") from error
 
     # --------------- KROK 2 – Maska wody z obrazka ----------------
 
@@ -129,11 +205,9 @@ class SentinelOGCFloodClient:
         g = arr[:, :, 1].astype(np.int16)
         b = arr[:, :, 2].astype(np.int16)
 
-        water_mask = (
-            (b >= BLUE_THRESHOLD) &
-            (r <= RED_MAX) &
-            (g <= GREEN_MAX)
-        )
+        water_mask = (b >= BLUE_THRESHOLD) & (r <= RED_MAX) & (g <= GREEN_MAX)
+        if arr.shape[2] == 4:
+            water_mask &= arr[:, :, 3] > 0
 
         logger.info(
             "Maska wody: %d pikseli zalanych na %d",
@@ -145,10 +219,7 @@ class SentinelOGCFloodClient:
     # --------------- KROK 3 – Denoising / kafelki ----------------
 
     def _downsample_mask(
-        self,
-        mask: np.ndarray,
-        block_size: int,
-        min_fraction: float
+        self, mask: np.ndarray, block_size: int, min_fraction: float
     ) -> np.ndarray:
         h, w = mask.shape
         h2 = (h // block_size) * block_size
@@ -172,18 +243,22 @@ class SentinelOGCFloodClient:
 
         logger.info(
             "Downsample: %dx%d -> %dx%d, kafelki z wodą: %d",
-            h, w, new_h, new_w, int(coarse_mask.sum())
+            h,
+            w,
+            new_h,
+            new_w,
+            int(coarse_mask.sum()),
         )
 
         return coarse_mask
 
-       # --------------- KROK 4 – maska -> poligony ----------------
+    # --------------- KROK 4 – maska -> poligony ----------------
 
     def _mask_to_polygons(
         self,
         coarse_mask: np.ndarray,
-        bbox: Tuple[float, float, float, float],
-    ) -> List[Polygon]:
+        bbox: tuple[float, float, float, float],
+    ) -> list[Polygon]:
         """
         Zamiana maski flood (0/1) na poligony w układzie geograficznym.
 
@@ -221,7 +296,7 @@ class SentinelOGCFloodClient:
         logger.info("Zbudowano %d kafelków z wodą, wykonuję unary_union…", len(boxes))
         merged = unary_union(boxes)
 
-        polygons: List[Polygon] = []
+        polygons: list[Polygon] = []
         if isinstance(merged, Polygon):
             polygons = [merged]
         elif isinstance(merged, MultiPolygon):
@@ -235,21 +310,18 @@ class SentinelOGCFloodClient:
 
         logger.info("Po union() zostało %d poligonów (przed filtrowaniem).", len(polygons))
 
-        # 🔹 NOWE: usuń bardzo małe plamki (pojedyncze 'kropki')
         polygons = self._remove_small_polygons(
             polygons,
             lat_step=lat_step,
             lon_step=lon_step,
-            min_cells=7,   # mredukcja szumu - usuwa małe clustery
+            min_cells=7,
         )
 
         return polygons
 
-
-
     # --------------- KROK 5 – zapis GeoJSON ----------------
 
-    def _polygons_to_geojson(self, polygons: List[Polygon]) -> dict:
+    def _polygons_to_geojson(self, polygons: list[Polygon]) -> dict:
         features = []
         for idx, poly in enumerate(polygons):
             if poly.is_empty:
@@ -270,22 +342,16 @@ class SentinelOGCFloodClient:
         }
 
     def _save_geojson(self, geojson: dict) -> None:
-        import json
-
-        self.flood_path.parent.mkdir(parents=True, exist_ok=True)
-        self.flood_path.write_text(
-            json.dumps(geojson, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        write_json_atomic(self.flood_path, geojson)
         logger.info("Zapisano flood.geojson do %s", self.flood_path)
 
     def _remove_small_polygons(
         self,
-        polygons: List[Polygon],
+        polygons: list[Polygon],
         lat_step: float,
         lon_step: float,
         min_cells: int = 3,
-    ) -> List[Polygon]:
+    ) -> list[Polygon]:
         """
         Usuwa bardzo małe poligony (pojedyncze 'kropki').
 
@@ -309,6 +375,7 @@ class SentinelOGCFloodClient:
 
 # ======================= FABRYKA KLIENTA =======================
 
+
 def create_default_ogc_client() -> SentinelOGCFloodClient:
     """
     Tworzy klienta na podstawie SENTINELHUB_INSTANCE_ID / INSTANCE_ID z .env.
@@ -320,5 +387,9 @@ def create_default_ogc_client() -> SentinelOGCFloodClient:
             "ustaw tam ID instancji z Sentinel Hub (NIE client_id OAuth)."
         )
 
-    config = SentinelOGCConfig(instance_id=instance_id)
-    return SentinelOGCFloodClient(config=config)
+    configured_time = os.getenv("SENTINELHUB_TIME_RANGE")
+    try:
+        config = SentinelOGCConfig(instance_id=instance_id, time=configured_time or None)
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
+    return SentinelOGCFloodClient(config=config, flood_path=FLOOD_PATH)

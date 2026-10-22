@@ -1,0 +1,17 @@
+# Optional operator configuration; keeps private, persistent workspace authorization.
+services:
+  api:
+    environment:
+      APP_MODE: application
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?Set a private ADMIN_API_KEY of at least 32 characters}
+      SENTINELHUB_INSTANCE_ID: ${SENTINELHUB_INSTANCE_ID:-}
+      SENTINELHUB_TIME_RANGE: ${SENTINELHUB_TIME_RANGE:-}
+      DATA_DIR: /app/data
+      MAX_BBOX_AREA_KM2: ${MAX_BBOX_AREA_KM2:-2500}
+      MAX_ROUTE_SNAP_DISTANCE_M: ${MAX_ROUTE_SNAP_DISTANCE_M:-2000}
+      MIN_FLOOD_OVERLAP_RATIO: ${MIN_FLOOD_OVERLAP_RATIO:-0.01}
+    volumes:
+      - sentinel-data:/app/data
+
+volumes:
+  sentinel-data:

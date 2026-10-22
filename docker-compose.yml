@@ -1,16 +1,68 @@
+name: ${COMPOSE_PROJECT_NAME:-sentinelhub}
+
 services:
   api:
+    image: sentinelhub-api:${IMAGE_TAG:-local}
     build: .
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
+    environment:
+      APP_MODE: application
+      DATA_DIR: /app/data
+      WORKSPACE_DB_NAME: ${WORKSPACE_DB_NAME:-sentinelhub.sqlite3}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      SENTINELHUB_INSTANCE_ID: ${SENTINELHUB_INSTANCE_ID:-}
+      SENTINELHUB_TIME_RANGE: ${SENTINELHUB_TIME_RANGE:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      WORKSPACE_TTL_HOURS: ${WORKSPACE_TTL_HOURS:-24}
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
     volumes:
-      - ./data:/app/data
+      - sentinel-data:/app/data
+    expose:
+      - "8000"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}
 
   web:
+    image: sentinelhub-web:${IMAGE_TAG:-local}
     build: ./frontend
+    environment:
+      PUBLIC_BASE_PATH: ${PUBLIC_BASE_PATH:-/}
+      PUBLIC_URL: ${PUBLIC_URL:-https://example.invalid}
     ports:
-      - "8080:80"
+      - "127.0.0.1:${DEMO_PORT:-8090}:80"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d:size=1m
+      - /var/cache/nginx:size=16m
+      - /var/run:size=1m
+      - /tmp:size=4m
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    cpus: 0.5
+    pids_limit: 32
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1/ready"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+
+volumes:
+  sentinel-data:

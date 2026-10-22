@@ -1,23 +1,23 @@
 import logging
 from pathlib import Path
-from typing import Tuple
 
 import requests
 
+from .http_utils import read_limited
 from .osm_to_geojson import osm_to_roads_geojson, save_geojson
 
 logger = logging.getLogger(__name__)
 
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_TIMEOUT = (10, 60)
 
 
-def build_overpass_query(bbox: Tuple[float, float, float, float]) -> str:
+def build_overpass_query(bbox: tuple[float, float, float, float]) -> str:
     """
     bbox: (south, west, north, east)
     """
     south, west, north, east = bbox
-
 
     query = f"""
     [out:xml][timeout:25];
@@ -30,7 +30,7 @@ def build_overpass_query(bbox: Tuple[float, float, float, float]) -> str:
     return query.strip()
 
 
-def download_osm_roads(bbox: Tuple[float, float, float, float]) -> str:
+def download_osm_roads(bbox: tuple[float, float, float, float]) -> str:
     """
     Pobiera dane OSM (XML) dla dróg w zadanym bboxie.
     bbox: (south, west, north, east) w stopniach WGS84.
@@ -39,15 +39,22 @@ def download_osm_roads(bbox: Tuple[float, float, float, float]) -> str:
     query = build_overpass_query(bbox)
     logger.info("Wysyłam zapytanie do Overpass API dla bbox=%s", bbox)
 
-    response = requests.post(OVERPASS_URL, data={"data": query})
+    response = requests.post(
+        OVERPASS_URL,
+        data={"data": query},
+        headers={"User-Agent": "SentinelHub-Evacuation-Router/0.2"},
+        timeout=OVERPASS_TIMEOUT,
+        stream=True,
+    )
+    payload = read_limited(response)
     response.raise_for_status()
 
-    logger.info("Odebrano dane z Overpass, długość odpowiedzi: %d znaków", len(response.text))
-    return response.text
+    logger.info("Odebrano dane z Overpass: %d bajtów", len(payload))
+    return payload.decode("utf-8")
 
 
 def download_and_save_roads_geojson(
-    bbox: Tuple[float, float, float, float],
+    bbox: tuple[float, float, float, float],
     output_path: Path,
 ) -> None:
     """
@@ -62,7 +69,11 @@ def download_and_save_roads_geojson(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     save_geojson(geojson, str(output_path))
 
-    logger.info("Zapisano roads GeoJSON do pliku %s (liczba dróg: %d)", output_path, len(geojson["features"]))
+    logger.info(
+        "Zapisano roads GeoJSON do pliku %s (liczba dróg: %d)",
+        output_path,
+        len(geojson["features"]),
+    )
 
 
 if __name__ == "__main__":

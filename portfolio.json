@@ -1,0 +1,37 @@
+{
+  "id": "sentinelhub-evacuation-router",
+  "title": "SentinelHub · Flood-aware routing",
+  "description": {
+    "pl": "Analiza tras na własnych danych GeoJSON z prywatnymi przestrzeniami, trwałą historią SQLite i chronionymi importami OSM / Sentinel WMS.",
+    "en": "Routing analysis with user-supplied GeoJSON, private workspaces, persistent SQLite history, and protected OSM / Sentinel WMS imports."
+  },
+  "stack": [
+    "Python 3.12",
+    "FastAPI",
+    "NetworkX",
+    "Shapely",
+    "NumPy",
+    "Pillow",
+    "HTML",
+    "CSS",
+    "JavaScript",
+    "SVG",
+    "Docker Compose",
+    "Nginx",
+    "SQLite"
+  ],
+  "repository_url": "https://github.com/Adam-Sapiecha/SentinelHub",
+  "demo_url": "https://luxonis.tail6ad453.ts.net:8443/sentinelhub/",
+  "demo_url_note": "Stable Tailscale Funnel handler on the existing public HTTPS listener. No visitor VPN or account required. New workspaces expire after 24 hours; external WMS imports are operator-only and currently unavailable.",
+  "screenshot_path": "docs/assets/application-desktop.png",
+  "mobile_screenshot_path": "docs/assets/application-mobile.png",
+  "data_mode": "sample",
+  "status": "deployed-arm64-https-user-data-verified-sentinel-renewal-required",
+  "sample_screenshot_path": "docs/assets/demo-desktop.png",
+  "data_mode_note": "The screenshot and separate public example use labelled synthetic inputs. The application also accepts user data and actual provider imports.",
+  "application_data_modes": [
+    "user",
+    "sample",
+    "live"
+  ]
+}

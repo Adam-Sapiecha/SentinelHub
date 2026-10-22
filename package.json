@@ -1,0 +1,7 @@
+{
+  "name": "sentinelhub-browser-checks",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {"test:browser": "node tests/browser-smoke.cjs", "test:workspace": "node tests/browser-workspace.cjs", "test:recruiter": "node tests/browser-recruiter.cjs", "test:sentinel-script": "node tests/sentinel-script.cjs"},
+  "devDependencies": {"playwright": "1.62.1"}
+}

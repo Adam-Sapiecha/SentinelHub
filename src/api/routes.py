@@ -1,187 +1,277 @@
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+import logging
+import math
+import secrets
+from functools import lru_cache
+from typing import Annotated, Literal
+from xml.etree.ElementTree import ParseError
+
+import requests
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import BaseModel, Field, model_validator
 from shapely.geometry import box, mapping
-import json
-from pathlib import Path
-from fastapi import HTTPException
-from src.services.evac_service import evac_service_singleton
+
+from src.core.config import MAX_BBOX_AREA_KM2, get_admin_api_key
+from src.core.flood_intersector import FloodDataUnavailableError
 from src.core.osm_downloader import download_osm_roads
 from src.core.osm_to_geojson import osm_to_roads_geojson
-from src.core.sentinel_flood_ogc_client import create_default_ogc_client
+from src.core.router import RoadDataUnavailableError, SnapDistanceExceededError
+from src.core.sentinel_flood_ogc_client import (
+    SentinelHubServiceError,
+    SentinelOGCFloodClient,
+    create_default_ogc_client,
+)
+from src.core.utils import haversine_distance_m
+from src.services.evac_service import evac_service_singleton
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["evacuation"])
+MIN_ADMIN_KEY_LENGTH = 32
 
 
-# ========= pomocnicze: parsowanie lat,lon =========
+class BBox(BaseModel):
+    south: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    west: float = Field(ge=-180, le=180, allow_inf_nan=False)
+    north: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    east: float = Field(ge=-180, le=180, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_bounds_and_area(self) -> "BBox":
+        if self.south >= self.north:
+            raise ValueError("south musi być mniejsze od north")
+        if self.west >= self.east:
+            raise ValueError("west musi być mniejsze od east")
+
+        middle_latitude = (self.south + self.north) / 2
+        height_m = haversine_distance_m((self.south, self.west), (self.north, self.west))
+        width_m = (
+            6_371_000
+            * math.radians(self.east - self.west)
+            * math.cos(math.radians(middle_latitude))
+        )
+        area_km2 = height_m * width_m / 1_000_000
+        if area_km2 > MAX_BBOX_AREA_KM2:
+            raise ValueError(f"Obszar BBOX przekracza limit {MAX_BBOX_AREA_KM2:g} km²")
+        return self
+
+    def as_tuple(self) -> tuple[float, float, float, float]:
+        return self.south, self.west, self.north, self.east
+
+
+class LineStringGeometry(BaseModel):
+    type: Literal["LineString"]
+    coordinates: list[tuple[float, float]]
+
+
+class RouteProperties(BaseModel):
+    length_m: float
+    segments: int
+
+
+class RouteFeature(BaseModel):
+    type: Literal["Feature"]
+    geometry: LineStringGeometry
+    properties: RouteProperties
+
+
+class RouteMetadata(BaseModel):
+    calc_time_ms: float
+    blocked_edges_count: int
+    start_snap_distance_m: float
+    end_snap_distance_m: float
+
+
+class RouteResponse(BaseModel):
+    route: RouteFeature
+    meta: RouteMetadata
+
+
+class RoadUpdateResponse(BaseModel):
+    status: Literal["OK"]
+    roads: int
+    bbox: BBox
+
+
+class FloodUpdateResponse(BaseModel):
+    status: Literal["OK"]
+    polygons: int
+    bbox: BBox
+
+
+def require_admin_key(
+    provided_key: Annotated[str | None, Header(alias="X-Admin-Key")] = None,
+) -> None:
+    expected_key = get_admin_api_key()
+    if not expected_key or len(expected_key) < MIN_ADMIN_KEY_LENGTH:
+        raise HTTPException(
+            status_code=503,
+            detail="Operacje administracyjne nie są skonfigurowane",
+        )
+    if not provided_key or not secrets.compare_digest(provided_key, expected_key):
+        raise HTTPException(status_code=401, detail="Nieprawidłowy klucz administratora")
+
 
 def parse_latlon(param: str) -> tuple[float, float]:
-    """Parsuje string w formacie 'lat,lon' na krotkę (lat, lon)."""
-    try:
-        parts = param.split(",")
-        if len(parts) != 2:
-            raise ValueError("Parametr musi być w formacie lat,lon")
-        lat = float(parts[0].strip())
-        lon = float(parts[1].strip())
-        return lat, lon
-    except Exception as e:
+    parts = param.split(",")
+    if len(parts) != 2:
         raise HTTPException(
-            status_code=400,
-            detail=f"Nieprawidłowy format współrzędnych: {param}. Błąd: {e}"
+            status_code=422,
+            detail="Współrzędne muszą być zapisane w formacie lat,lon",
         )
+    try:
+        latitude, longitude = (float(part.strip()) for part in parts)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422,
+            detail="Szerokość i długość geograficzna muszą być liczbami",
+        ) from error
+
+    if not math.isfinite(latitude) or not math.isfinite(longitude):
+        raise HTTPException(status_code=422, detail="Współrzędne muszą być skończone")
+    if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
+        raise HTTPException(status_code=422, detail="Współrzędne są poza zakresem WGS84")
+    return latitude, longitude
 
 
-# ========= 1) Wyznaczanie trasy =========
-
-@router.get("/evac/route")
+@router.get("/evac/route", response_model=RouteResponse)
 def get_evac_route(
     start: str = Query(..., description="Punkt startowy w formacie 'lat,lon'"),
     end: str = Query(..., description="Punkt końcowy w formacie 'lat,lon'"),
 ):
-    """
-    Wyznacza trasę ewakuacji między punktami start i end, omijając flood zones.
-    Zwraca GeoJSON linii + metadane.
-    """
-    start_lat, start_lon = parse_latlon(start)
-    end_lat, end_lon = parse_latlon(end)
+    start_coordinate = parse_latlon(start)
+    end_coordinate = parse_latlon(end)
 
-    result = evac_service_singleton.get_route((start_lat, start_lon), (end_lat, end_lon))
+    try:
+        result = evac_service_singleton.get_route(start_coordinate, end_coordinate)
+    except SnapDistanceExceededError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except (RoadDataUnavailableError, FloodDataUnavailableError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
     if result is None:
         raise HTTPException(
             status_code=404,
-            detail="Nie udało się znaleźć trasy między zadanymi punktami"
+            detail="Nie udało się znaleźć bezpiecznej trasy między punktami",
         )
 
-    route_line, meta = result
-
-    geojson_feature = {
-        "type": "Feature",
-        "geometry": route_line.__geo_interface__,
-        "properties": {
-            "length_m": meta["length_m"],
-            "segments": meta["segments"],
-        },
-    }
-
+    route_line, metadata = result
     return {
-        "route": geojson_feature,
+        "route": {
+            "type": "Feature",
+            "geometry": route_line.__geo_interface__,
+            "properties": {
+                "length_m": metadata["length_m"],
+                "segments": metadata["segments"],
+            },
+        },
         "meta": {
-            "calc_time_ms": meta["calc_time_ms"],
-            "blocked_edges_count": meta["blocked_edges_count"],
+            "calc_time_ms": metadata["calc_time_ms"],
+            "blocked_edges_count": metadata["blocked_edges_count"],
+            "start_snap_distance_m": metadata["start_snap_distance_m"],
+            "end_snap_distance_m": metadata["end_snap_distance_m"],
         },
     }
 
 
-# ========= 2) Admin – update dróg (Overpass) =========
-
-class BBOX(BaseModel):
-    south: float
-    west: float
-    north: float
-    east: float
-
-
-@router.post("/admin/update-roads")
-async def update_roads(bbox: BBOX):
-    """
-    Pobiera nowe dane drogowe z Overpass API i przeładowuje graf w pamięci.
-    """
-    osm_xml = download_osm_roads(
-        (bbox.south, bbox.west, bbox.north, bbox.east)
-    )
-
-    geojson = osm_to_roads_geojson(osm_xml)
-
-    evac_service_singleton.reload_graph(geojson)
+@router.post(
+    "/admin/update-roads",
+    dependencies=[Depends(require_admin_key)],
+    response_model=RoadUpdateResponse,
+)
+def update_roads(bbox: BBox):
+    try:
+        osm_xml = download_osm_roads(bbox.as_tuple())
+        geojson = osm_to_roads_geojson(osm_xml)
+        evac_service_singleton.reload_graph(geojson)
+    except requests.RequestException as error:
+        logger.error("Overpass request failed: %s", type(error).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail="Nie udało się pobrać danych drogowych z Overpass API",
+        ) from error
+    except (ValueError, OSError, ParseError) as error:
+        logger.error("Road update failed: %s", type(error).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail="Pobrane dane drogowe są nieprawidłowe",
+        ) from error
 
     return {
         "status": "OK",
         "roads": len(geojson["features"]),
-        "bbox": bbox,
+        "bbox": bbox.model_dump(),
     }
 
-@router.post("/admin/set-test-flood-rect")
-def set_test_flood_rect(bbox: BBOX):
-    """
-    Zapisuje testowy, średniej wielkości prostokąt jako flood zones
-    (1 poligon) w środku aktualnego BBOX.
-    """
-    # “Średni” prostokąt: zostawiamy margines 25% z każdej strony
-    dx = (bbox.east - bbox.west) * 0.25
-    dy = (bbox.north - bbox.south) * 0.25
 
-    west = bbox.west + dx
-    east = bbox.east - dx
-    south = bbox.south + dy
-    north = bbox.north - dy
-
-    geom = box(west, south, east, north)
-
-    fc = {
+@router.post(
+    "/admin/set-test-flood-rect",
+    dependencies=[Depends(require_admin_key)],
+    response_model=FloodUpdateResponse,
+)
+def set_test_flood_rect(bbox: BBox):
+    longitude_margin = (bbox.east - bbox.west) * 0.25
+    latitude_margin = (bbox.north - bbox.south) * 0.25
+    geometry = box(
+        bbox.west + longitude_margin,
+        bbox.south + latitude_margin,
+        bbox.east - longitude_margin,
+        bbox.north - latitude_margin,
+    )
+    feature_collection = {
         "type": "FeatureCollection",
         "features": [
             {
                 "type": "Feature",
                 "properties": {"source": "test-rect"},
-                "geometry": mapping(geom),
+                "geometry": mapping(geometry),
             }
         ],
     }
-
-    out = Path("data/flood.geojson")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(fc, ensure_ascii=False), encoding="utf-8")
-
-    return {"status": "OK", "polygons": 1, "bbox": bbox}
-
-# ========= 3) Admin – update flood (Sentinel Hub OGC) =========
-
-_sentinel_flood_client = None
+    evac_service_singleton.set_flood_geojson(feature_collection)
+    return {"status": "OK", "polygons": 1, "bbox": bbox.model_dump()}
 
 
-def get_sentinel_client():
-    global _sentinel_flood_client
-    if _sentinel_flood_client is None:
-        _sentinel_flood_client = create_default_ogc_client()
-    return _sentinel_flood_client
+@lru_cache(maxsize=1)
+def get_sentinel_client() -> SentinelOGCFloodClient:
+    return create_default_ogc_client()
 
 
-@router.post("/admin/update-flood")
-def update_flood(bbox: BBOX):
-    """
-    Aktualizuje flood zones na podstawie Sentinel Hub OGC WMS
-    dla podanego BBOX (south, west, north, east).
-    Zapisuje data/flood.geojson, z którego korzysta EvacService.
-    """
+@router.post(
+    "/admin/update-flood",
+    dependencies=[Depends(require_admin_key)],
+    response_model=FloodUpdateResponse,
+)
+def update_flood(bbox: BBox):
     try:
         client = get_sentinel_client()
-    except RuntimeError as e:
-        # Brak INSTANCE_ID – ładny komunikat dla użytkownika
-        raise HTTPException(status_code=500, detail=str(e))
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
     try:
-        count = client.update_flood_for_bbox(
-            (bbox.south, bbox.west, bbox.north, bbox.east)
-        )
-    except Exception as e:
+        count = client.update_flood_for_bbox(bbox.as_tuple())
+    except SentinelHubServiceError as error:
+        logger.warning("Sentinel Hub rejected the flood update: %s", error)
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    except (requests.RequestException, RuntimeError, OSError) as error:
+        logger.error("Sentinel update failed: %s", type(error).__name__)
         raise HTTPException(
-            status_code=500,
-            detail=f"Nie udało się zaktualizować flood zones z Sentinel Hub: {e}",
-        )
+            status_code=502,
+            detail="Nie udało się zaktualizować stref zalania z Sentinel Hub",
+        ) from error
 
-    return {
-        "status": "OK",
-        "polygons": count,
-        "bbox": bbox,
-    }
+    return {"status": "OK", "polygons": count, "bbox": bbox.model_dump()}
 
 
 @router.get("/debug/flood-geojson")
 def get_flood_geojson():
-    path = Path("data/flood.geojson")
-    if not path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="Brak pliku flood.geojson – najpierw wywołaj /api/admin/update-flood"
-        )
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return evac_service_singleton.get_flood_geojson()
+    except FloodDataUnavailableError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@router.get("/debug/blocked-edges")
+def get_blocked_edges():
+    try:
+        return evac_service_singleton.get_blocked_edges_geojson()
+    except (RoadDataUnavailableError, FloodDataUnavailableError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error

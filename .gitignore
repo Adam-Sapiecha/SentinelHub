@@ -10,6 +10,7 @@ __pycache__/
 # Virtual environments
 venv/
 .venv/
+.venv*/
 env/
 ENV/
 
@@ -38,8 +39,11 @@ uvicorn.log
 # =========================
 data/
 *.geojson
+!examples/*.geojson
+!frontend/examples/*.geojson
 *.tif
 *.png
+!docs/assets/*.png
 
 # (jeśli chcesz trzymać pusty folder data/)
 !data/.gitkeep
@@ -81,3 +85,9 @@ yarn-error.log*
 .coverage
 htmlcov/
 .pytest_cache/
+.ruff_cache/
+test-results/
+.arm64-wheels/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
