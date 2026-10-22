@@ -426,7 +426,7 @@ def test_api_never_returns_owner_digest(application):
 
 def test_creation_quota_limits_persistent_public_storage(application):
     client, _ = application
-    for _ in range(25):
+    for _ in range(100):
         create(client)
     assert client.post("/api/workspaces", json={"name": "over quota"}).status_code == 507
 

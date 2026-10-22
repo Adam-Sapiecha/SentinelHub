@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 SCHEMA_VERSION = 2
-MAX_WORKSPACES = 25
+MAX_WORKSPACES = 100
 MAX_WORKSPACE_BYTES = 8 * 1024 * 1024
 MAX_HISTORY = 10
 MIGRATIONS = {
@@ -127,7 +127,10 @@ class WorkspaceStore:
                 connection.execute("SELECT count(*) FROM workspaces").fetchone()[0]
                 >= MAX_WORKSPACES
             ):
-                raise CapacityError("Limit 25 przestrzeni osiągnięty; skontaktuj się z operatorem")
+                raise CapacityError(
+                    f"Limit {MAX_WORKSPACES} przestrzeni osiągnięty; "
+                    "spróbuj po wygaśnięciu starszych danych"
+                )
             connection.execute(
                 "INSERT INTO workspaces(id,name,owner_hash,created_at,expires_at) "
                 "VALUES(?,?,?,?,?)",

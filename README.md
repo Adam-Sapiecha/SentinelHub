@@ -146,7 +146,7 @@ klucz, 403 brak uprawnień operatora, 409 konflikt wersji / brak pary, 413 body,
 | `SENTINELHUB_TIME_RANGE` | Zakres WMS YYYY-MM-DD/YYYY-MM-DD; domyślnie ostatnie 30 dni |
 | `ALLOWED_ORIGINS` | Opcjonalny CORS; panel pracuje pod tym samym originem |
 
-Stałe ograniczenia aplikacji: 25 przestrzeni, 8 MiB logicznych danych na przestrzeń,
+Stałe ograniczenia aplikacji: 100 przestrzeni, 8 MiB logicznych danych na przestrzeń,
 do 10 snapshotów historii (starsze mogą ustąpić miejsca nowym), 1 MiB/500 features/
 10000 współrzędnych na zbiór, 2000 odcinków drogowych, lokalna sieć do 0,5° na oś.
 Import do 100 km² i 4 MiB odpowiedzi upstream. Body uploadu do 3 MiB, inne 4 KiB.
