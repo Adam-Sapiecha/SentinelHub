@@ -159,7 +159,7 @@ byId("load-example").addEventListener("click",()=>{
     const body={revision:workspace.revision,roads,flood,source:"Syntetyczny przykład SentinelHub · ręcznie przygotowane GeoJSON",observed_at:"2026-01-01T00:00:00Z",sample:true};
     showWorkspace(await request(url("/datasets"),{method:"PUT",body:JSON.stringify(body)}));
     byId("route-start").value="52,21";byId("route-end").value="52,21.002";
-    byId("observed-at").value="2026-01-01T00:00";byId("access-details").open=false;
+    byId("access-details").open=false;
     drawMap(workspace.datasets);await refreshHistory();
     status("Przykład wczytany. Kliknij „Oblicz i zapisz analizę” pod mapą. Aby wrócić później, zachowaj klucz w sekcji dostępu.","");
     status("Punkty są gotowe. Oblicz trasę: zalany odcinek wymusi objazd.","pending","analysis-status");
