@@ -22,7 +22,7 @@ const assert=require("node:assert/strict");
       console.log("Workspace process-restart PASS: credentials, datasets, saved analysis.");return;
     }
     await page.locator("#workspace-name").fill("Analiza własnych plików · przykład");
-    await page.locator("#create-workspace").click();await ready("Przestrzeń utworzona");
+    await page.locator("#create-workspace").click();await ready("Przestrzeń gotowa");
     if(!await page.locator("#save-access").isVisible()) await page.locator("#access-details summary").click();
     const downloadEvent=page.waitForEvent("download");await page.locator("#save-access").click();
     const accessDownload=await downloadEvent;await accessDownload.saveAs(path.join(folder,"access.json"));
