@@ -118,7 +118,7 @@ async function refreshHistory() {
     const row=document.createElement("div");row.className="history-item";
     const button=document.createElement("button");button.type="button";
     button.textContent=`${new Date(item.created_at).toLocaleString("pl-PL")} · v${item.revision} · ${item.status === "found" ? "trasa" : "brak przejazdu"}`;
-    button.addEventListener("click",()=>action("Odczytywanie wyniku…",async()=>{showResult(await request(url(`/analyses/${item.id}`)));status("Odczytano zapisany wynik, bez ponownych obliczeń.","");}));
+    button.addEventListener("click",()=>action("Odczytywanie wyniku…",async()=>{showResult(await request(url(`/analyses/${item.id}`)));status("Odczytano zapisany wynik.","");}));
     const remove=document.createElement("button");remove.type="button";remove.className="danger";remove.textContent="Usuń";remove.setAttribute("aria-label",`Usuń analizę ${item.id}`);
     remove.addEventListener("click",()=>{if (confirm("Usunąć wyłącznie ten wynik? Dane wejściowe pozostaną zapisane.")) action("Usuwanie wyniku…",async()=>{await request(url(`/analyses/${item.id}`),{method:"DELETE"});if(currentResult?.analysis_id===item.id) blankMetrics();await refreshHistory();status("Wynik usunięty. Zbiory wejściowe zachowano.","");});});
     row.append(button,remove);list.append(row);
@@ -135,7 +135,7 @@ function showResult(result) {
   byId("data-mode").textContent=({sample:"DANE PRZYKŁADOWE",user:"DANE UŻYTKOWNIKA",live:"IMPORT ZEWNĘTRZNY"})[result.data_mode];
   byId("data-heading").textContent=result.source;
   byId("own-metadata").textContent=`Wynik v${result.revision} · ${new Date(result.created_at).toLocaleString("pl-PL")} · ${m.nodes} węzłów · ${m.calc_time_ms.toLocaleString("pl-PL")} ms · bieżące dane v${workspace.revision}`;
-  status(result.status === "unreachable" ? "Brak przejazdu. Wynik odcięcia zapisany w historii." : "Znaleziono przejazd. Wynik z danymi wejściowymi zapisany w historii.",result.status === "unreachable" ? "warning" : "","analysis-status");
+  status(result.status === "unreachable" ? "Brak przejazdu. Wynik odcięcia zapisany w historii." : "Znaleziono przejazd. Zapisano w historii.",result.status === "unreachable" ? "warning" : "","analysis-status");
 }
 function download(value, filename) {
   const location=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:"application/json"}));
@@ -156,7 +156,7 @@ byId("load-example").addEventListener("click",()=>{
       credentials={id:value.id,key:value.key};byId("workspace-id").value=value.id;byId("workspace-key").value=value.key;
       showWorkspace(await request(url("")));
     }
-    const body={revision:workspace.revision,roads,flood,source:"Syntetyczny przykład SentinelHub · ręcznie przygotowane GeoJSON",observed_at:"2026-01-01T00:00:00Z",sample:true};
+    const body={revision:workspace.revision,roads,flood,source:"Syntetyczny przykład GeoJSON",observed_at:"2026-01-01T00:00:00Z",sample:true};
     showWorkspace(await request(url("/datasets"),{method:"PUT",body:JSON.stringify(body)}));
     byId("route-start").value="52,21";byId("route-end").value="52,21.002";
     byId("access-details").open=false;
